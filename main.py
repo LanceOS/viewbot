@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 import os
 import signal
+from multiprocessing import Process, Value, Lock
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,34 +22,38 @@ logger = logging.getLogger(__name__)
 # File to store proxy list
 PROXY_FILE = "proxylist.txt"
 
-# Global flag to control execution
-running = True
+# Global flag to control execution using multiprocessing.Value
+running = Value('b', True)  # 'b' for boolean
 
 # User agent pool for rotation
 USER_AGENTS = [
-    # Desktop
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
-    # Mobile
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1',
-    'Mozilla/5.0 (Linux; Android 13; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
-    'Mozilla/5.0 (iPad; CPU OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1'
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14.3; rv:123.0) Gecko/20100101 Firefox/123.0',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:123.0) Gecko/20100101 Firefox/123.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.2420.65',
+    'Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.2478.51',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 OPR/108.0.0.0',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/23.0 Chrome/115.0.0.0 Safari/537.36',
 ]
 
 def signal_handler(sig, frame):
     """Handle Ctrl+C to gracefully exit the script"""
-    global running
-    logger.info("Stopping script (this may take a moment to complete current view)...")
-    running = False
+    with running.get_lock():
+        logger.info("Stopping script (this may take a moment to complete current view)...")
+        running.value = False
 
 # Register the signal handler for graceful shutdown
 signal.signal(signal.SIGINT, signal_handler)
 
+# Unchanged functions: fetch_proxies, get_random_proxy, try_open_comments, simulate_short_view
 def fetch_proxies():
-    """
-    Fetch free proxies from multiple sources and save to a file
-    """
+    """Fetch free proxies from multiple sources and save to a file"""
     logger.info("Fetching fresh proxies...")
     proxies = []
     sources = [
@@ -127,9 +132,7 @@ def fetch_proxies():
     return working_proxies
 
 def get_random_proxy():
-    """
-    Get a random proxy from the proxy file or fetch new ones if needed
-    """
+    """Get a random proxy from the proxy file or fetch new ones if needed"""
     proxies = []
     if os.path.exists(PROXY_FILE):
         with open(PROXY_FILE, "r") as f:
@@ -144,11 +147,8 @@ def get_random_proxy():
     return proxy
 
 def try_open_comments(driver):
-    """
-    Attempt to open the comments section using multiple methods
-    """
+    """Attempt to open the comments section using multiple methods"""
     logger.info("Attempting to open comments section")
-    # Scroll to the bottom to load comments if needed
     driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
     time.sleep(1)
     
@@ -164,12 +164,10 @@ def try_open_comments(driver):
     for by, selector in methods:
         try:
             element = WebDriverWait(driver, 5).until(EC.presence_of_element_located((by, selector)))
-            # For yt-spec-touch-feedback-shape__fill, we need to find the parent button
             if selector == ".yt-spec-touch-feedback-shape__fill":
                 button = element.find_element(By.XPATH, "./ancestor::button[contains(@aria-label, 'Comments')]")
             else:
                 button = element
-            # Ensure the button is clickable
             WebDriverWait(driver, 5).until(EC.element_to_be_clickable(button))
             actions = ActionChains(driver)
             actions.move_to_element(button).click().perform()
@@ -188,7 +186,6 @@ def try_open_comments(driver):
         except Exception as e:
             logger.warning(f"Error with {by}: {selector} - {str(e)}")
     
-    # If all methods fail, try JavaScript to find and click
     try:
         driver.execute_script("""
             const comments = document.querySelector('ytm-comment-section-renderer, #comments-button, button[aria-label="Comments"], .yt-spec-touch-feedback-shape__fill');
@@ -209,8 +206,9 @@ def try_open_comments(driver):
 def simulate_short_view(short_url, proxy=None):
     chrome_options = Options()
     chrome_options.add_argument("--window-size=412,732")
-    ua = random.choice(USER_AGENTS)  # Random user agent per view
+    ua = random.choice(USER_AGENTS)
     chrome_options.add_argument(f"--user-agent={ua}")
+    chrome_options.add_argument("--mute-audio")
     logger.info(f"Using user agent: {ua}")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -231,18 +229,15 @@ def simulate_short_view(short_url, proxy=None):
     })
     
     try:
-        # Start at the YouTube homepage
         logger.info("Opening YouTube homepage")
         driver.get("https://www.youtube.com")
         WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.TAG_NAME, "ytd-app")))
         logger.info("YouTube homepage loaded successfully")
         time.sleep(3)
         
-        # Extract the Short ID from the URL
         short_id = short_url.split("/")[-1]
         logger.info(f"Extracted Short ID: {short_id}")
         
-        # Search for the specific Short
         try:
             search_bar = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.NAME, "search_query"))
@@ -254,7 +249,6 @@ def simulate_short_view(short_url, proxy=None):
             logger.info(f"Searched for Short ID: {short_id}")
             time.sleep(3)
             
-            # Click on the first Shorts result
             short_link = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, f"//a[contains(@href, '/shorts/{short_id}')]"))
             )
@@ -266,7 +260,6 @@ def simulate_short_view(short_url, proxy=None):
             driver.get(short_url)
             time.sleep(5)
         
-        # Remove popups
         driver.execute_script("""
             const dialogs = document.querySelectorAll('tp-yt-paper-dialog, ytd-popup-container');
             dialogs.forEach(dialog => dialog.remove());
@@ -278,7 +271,6 @@ def simulate_short_view(short_url, proxy=None):
         logger.info("Attempted to remove popups via JavaScript")
         time.sleep(2)
         
-        # Find and play the video
         logger.info("Attempting to find and interact with the video player...")
         try:
             video = WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.CSS_SELECTOR, "video")))
@@ -321,27 +313,24 @@ def simulate_short_view(short_url, proxy=None):
             """)
             time.sleep(2)
         
-        # Set watch time between 1 and 2 minutes (60-120 seconds)
         watch_time = random.uniform(60, 120)
         logger.info(f"Watching for {watch_time:.1f} seconds")
         start_time = time.time()
-        comments_opened = False  # Flag to ensure comments are opened at least once
-        # Generate 3 random attempt times for opening comments
+        comments_opened = False
         attempt_times = sorted([random.uniform(0, watch_time) for _ in range(3)])
         
         while time.time() - start_time < watch_time:
-            if not running:
-                logger.info("Stopping current view early due to shutdown signal")
-                break
+            with running.get_lock():
+                if not running.value:
+                    logger.info("Stopping current view early due to shutdown signal")
+                    break
             elapsed = time.time() - start_time
             
-            # Attempt to open comments at predefined random times (max 3 attempts)
             if not comments_opened and attempt_times and elapsed >= attempt_times[0]:
                 if try_open_comments(driver):
                     comments_opened = True
                 attempt_times.pop(0)
             
-            # Check if video is still playing
             is_playing = driver.execute_script("""
                 const videos = document.querySelectorAll('video');
                 for (let i = 0; i < videos.length; i++) {
@@ -356,13 +345,11 @@ def simulate_short_view(short_url, proxy=None):
                     videos.forEach(v => v.play());
                 """)
             
-            # Small random scroll to simulate engagement
             if random.random() < 0.2:
                 small_scroll = random.randint(-10, 10)
                 driver.execute_script(f"window.scrollBy(0, {small_scroll});")
             time.sleep(3)
         
-        # Final attempt to open comments if not opened yet
         if not comments_opened:
             logger.info("Making a final attempt to open comments")
             try_open_comments(driver)
@@ -380,62 +367,96 @@ def simulate_short_view(short_url, proxy=None):
     finally:
         driver.quit()
 
-def process_shorts_continuously(urls, use_proxies=True):
-    """
-    Process shorts continuously in random order until stopped
-    """
-    global running
-    view_count = 0
-    success_count = 0
-    fail_count = 0
-    
-    logger.info("Starting continuous viewing mode. Press Ctrl+C to stop.")
-    logger.info(f"Starting continuous viewing of {len(urls)} shorts in random order")
-    
-    if use_proxies and not os.path.exists(PROXY_FILE):
-        fetch_proxies()
-    
-    while running:
+def process_short_worker(urls, use_proxies, view_count, success_count, fail_count, lock):
+    """Worker function for each process"""
+    while True:
+        with running.get_lock():
+            if not running.value:
+                break
+        
         shuffled_urls = urls.copy()
         random.shuffle(shuffled_urls)
         for url in shuffled_urls:
-            if not running:
-                break
-            view_count += 1
+            with running.get_lock():
+                if not running.value:
+                    break
+            
+            with lock:
+                view_count.value += 1
+                current_view = view_count.value
+            
             proxy = get_random_proxy() if use_proxies else None
             if use_proxies and proxy is None:
                 logger.warning("No proxies available, fetching new ones...")
                 fetch_proxies()
                 proxy = get_random_proxy()
             
-            logger.info(f"View attempt #{view_count} - URL: {url}")
+            logger.info(f"Process {os.getpid()} - View attempt #{current_view} - URL: {url}")
             success = simulate_short_view(url, proxy)
             
-            if success:
-                success_count += 1
-            else:
-                fail_count += 1
+            with lock:
+                if success:
+                    success_count.value += 1
+                else:
+                    fail_count.value += 1
+                
+                if current_view % 10 == 0:
+                    success_rate = (success_count.value / current_view) * 100
+                    logger.info(f"Stats: {success_count.value} successes, {fail_count.value} failures - {success_rate:.1f}% success rate")
             
-            if view_count % 10 == 0:
-                success_rate = (success_count / view_count) * 100
-                logger.info(f"Stats: {success_count} successes, {fail_count} failures - {success_rate:.1f}% success rate")
-            
-            if running:
+            if running.value:
                 delay = random.uniform(5, 15)
-                logger.info(f"Waiting {delay:.2f} seconds before next video...")
+                logger.info(f"Process {os.getpid()} waiting {delay:.2f} seconds before next video...")
                 sleep_start = time.time()
-                while running and (time.time() - sleep_start < delay):
+                while running.value and (time.time() - sleep_start < delay):
                     time.sleep(1)
+
+def process_shorts_continuously(urls, use_proxies=True, num_processes=3):
+    """
+    Process shorts continuously in random order until stopped, using multiple processes
+    """
+    view_count = Value('i', 0)  # Shared integer for view count
+    success_count = Value('i', 0)  # Shared integer for successes
+    fail_count = Value('i', 0)  # Shared integer for failures
+    lock = Lock()  # Lock for process-safe counter updates
     
+    logger.info(f"Starting continuous viewing mode with {num_processes} processes. Press Ctrl+C to stop.")
+    logger.info(f"Starting continuous viewing of {len(urls)} shorts in random order")
+    
+    if use_proxies and not os.path.exists(PROXY_FILE):
+        fetch_proxies()
+    
+    # Start processes
+    processes = []
+    for _ in range(num_processes):
+        p = Process(target=process_short_worker, args=(urls, use_proxies, view_count, success_count, fail_count, lock))
+        p.start()
+        processes.append(p)
+    
+    # Keep main process alive and wait for processes to finish
+    try:
+        for p in processes:
+            p.join()
+    except KeyboardInterrupt:
+        with running.get_lock():
+            logger.info("Stopping processes due to interrupt...")
+            running.value = False
+        for p in processes:
+            p.join()
+    
+    # Final stats
     logger.info("===== FINAL VIEWING RESULTS =====")
-    logger.info(f"Total view attempts: {view_count}")
-    logger.info(f"Successful views: {success_count}")
-    logger.info(f"Failed views: {fail_count}")
-    if view_count > 0:
-        success_rate = (success_count / view_count) * 100
+    logger.info(f"Total view attempts: {view_count.value}")
+    logger.info(f"Successful views: {success_count.value}")
+    logger.info(f"Failed views: {fail_count.value}")
+    if view_count.value > 0:
+        success_rate = (success_count.value / view_count.value) * 100
         logger.info(f"Success rate: {success_rate:.1f}%")
 
 if __name__ == "__main__":
+    # Variable to change the number of processes
+    NUM_PROCESSES = 6  # Change this value to adjust the number of concurrent processes
+    
     shorts_to_view = [
         "https://www.youtube.com/shorts/lOVVGfSKCv4",
         "https://www.youtube.com/shorts/OPSV7kjrnw8",
@@ -448,7 +469,7 @@ if __name__ == "__main__":
     ]
     
     try:
-        process_shorts_continuously(shorts_to_view, use_proxies=True)
+        process_shorts_continuously(shorts_to_view, use_proxies=True, num_processes=NUM_PROCESSES)
     except KeyboardInterrupt:
         logger.info("Script interrupted by user")
     except Exception as e:

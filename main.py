@@ -13,7 +13,9 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor
 import os
 import signal
-from multiprocessing import Process, Value, Lock
+import threading
+
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -22,34 +24,79 @@ logger = logging.getLogger(__name__)
 # File to store proxy list
 PROXY_FILE = "proxylist.txt"
 
-# Global flag to control execution using multiprocessing.Value
-running = Value('b', True)  # 'b' for boolean
+# Global flag to control execution
+running = True
 
 # User agent pool for rotation
 USER_AGENTS = [
+    # Chrome on Windows
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',  # Windows 7
+    
+    # Chrome on macOS
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 12_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+
+    # Chrome on Linux
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+
+    # Firefox on Windows
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
+    'Mozilla/5.0 (Windows NT 11.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
+    'Mozilla/5.0 (Windows NT 6.3; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',  # Windows 8.1
+
+    # Firefox on macOS
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 14.3; rv:123.0) Gecko/20100101 Firefox/123.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4; rv:124.0) Gecko/20100101 Firefox/124.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6; rv:125.0) Gecko/20100101 Firefox/125.0',
+
+    # Firefox on Linux
     'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:123.0) Gecko/20100101 Firefox/123.0',
+    'Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0',
+    'Mozilla/5.0 (X11; Fedora; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0',
+
+    # Safari on macOS
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Safari/605.1.15',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 12_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15',
+
+    # Edge on Windows
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.2420.65',
     'Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.2478.51',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.2535.51',
+
+    # Opera on Windows
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 OPR/108.0.0.0',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/23.0 Chrome/115.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 OPR/109.0.0.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 OPR/110.0.0.0',
+
+    # Opera on Linux
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 OPR/108.0.0.0',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 OPR/109.0.0.0',
 ]
+
+
+
 
 def signal_handler(sig, frame):
     """Handle Ctrl+C to gracefully exit the script"""
-    with running.get_lock():
-        logger.info("Stopping script (this may take a moment to complete current view)...")
-        running.value = False
+    global running
+    logger.info("Stopping script (this may take a moment to complete current view)...")
+    running = False
 
 # Register the signal handler for graceful shutdown
 signal.signal(signal.SIGINT, signal_handler)
+
+
 
 # Unchanged functions: fetch_proxies, get_random_proxy, try_open_comments, simulate_short_view
 def fetch_proxies():
@@ -205,6 +252,7 @@ def try_open_comments(driver):
 
 def simulate_short_view(short_url, proxy=None):
     chrome_options = Options()
+    chrome_options.add_argument("--headless=True")
     chrome_options.add_argument("--window-size=412,732")
     ua = random.choice(USER_AGENTS)
     chrome_options.add_argument(f"--user-agent={ua}")
@@ -367,23 +415,19 @@ def simulate_short_view(short_url, proxy=None):
     finally:
         driver.quit()
 
-def process_short_worker(urls, use_proxies, view_count, success_count, fail_count, lock):
-    """Worker function for each process"""
-    while True:
-        with running.get_lock():
-            if not running.value:
-                break
-        
+def thread_short_worker(urls, use_proxies, stats):
+    """Worker function for each thread"""
+    thread_id = threading.current_thread().name
+    while running:
         shuffled_urls = urls.copy()
         random.shuffle(shuffled_urls)
         for url in shuffled_urls:
-            with running.get_lock():
-                if not running.value:
-                    break
+            if not running:
+                break
             
-            with lock:
-                view_count.value += 1
-                current_view = view_count.value
+            with stats["lock"]:
+                stats["view_count"] += 1
+                current_view = stats["view_count"]
             
             proxy = get_random_proxy() if use_proxies else None
             if use_proxies and proxy is None:
@@ -391,71 +435,76 @@ def process_short_worker(urls, use_proxies, view_count, success_count, fail_coun
                 fetch_proxies()
                 proxy = get_random_proxy()
             
-            logger.info(f"Process {os.getpid()} - View attempt #{current_view} - URL: {url}")
+            logger.info(f"Thread {thread_id} - View attempt #{current_view} - URL: {url}")
             success = simulate_short_view(url, proxy)
             
-            with lock:
+            with stats["lock"]:
                 if success:
-                    success_count.value += 1
+                    stats["success_count"] += 1
                 else:
-                    fail_count.value += 1
+                    stats["fail_count"] += 1
                 
                 if current_view % 10 == 0:
-                    success_rate = (success_count.value / current_view) * 100
-                    logger.info(f"Stats: {success_count.value} successes, {fail_count.value} failures - {success_rate:.1f}% success rate")
+                    success_rate = (stats["success_count"] / current_view) * 100
+                    logger.info(f"Stats: {stats['success_count']} successes, {stats['fail_count']} failures - {success_rate:.1f}% success rate")
             
-            if running.value:
+            if running:
                 delay = random.uniform(5, 15)
-                logger.info(f"Process {os.getpid()} waiting {delay:.2f} seconds before next video...")
+                logger.info(f"Thread {thread_id} waiting {delay:.2f} seconds before next video...")
                 sleep_start = time.time()
-                while running.value and (time.time() - sleep_start < delay):
+                while running and (time.time() - sleep_start < delay):
                     time.sleep(1)
 
-def process_shorts_continuously(urls, use_proxies=True, num_processes=3):
+def process_shorts_continuously(urls, use_proxies=True, num_threads=3):
     """
-    Process shorts continuously in random order until stopped, using multiple processes
+    Process shorts continuously in random order until stopped, using multiple threads
     """
-    view_count = Value('i', 0)  # Shared integer for view count
-    success_count = Value('i', 0)  # Shared integer for successes
-    fail_count = Value('i', 0)  # Shared integer for failures
-    lock = Lock()  # Lock for process-safe counter updates
+    # Shared stats dictionary with a lock for thread-safe updates
+    stats = {
+        "view_count": 0,
+        "success_count": 0,
+        "fail_count": 0,
+        "lock": threading.Lock()
+    }
     
-    logger.info(f"Starting continuous viewing mode with {num_processes} processes. Press Ctrl+C to stop.")
+    logger.info(f"Starting continuous viewing mode with {num_threads} threads. Press Ctrl+C to stop.")
     logger.info(f"Starting continuous viewing of {len(urls)} shorts in random order")
     
     if use_proxies and not os.path.exists(PROXY_FILE):
         fetch_proxies()
     
-    # Start processes
-    processes = []
-    for _ in range(num_processes):
-        p = Process(target=process_short_worker, args=(urls, use_proxies, view_count, success_count, fail_count, lock))
-        p.start()
-        processes.append(p)
+    # Start threads
+    threads = []
+    for _ in range(num_threads):
+        t = threading.Thread(target=thread_short_worker, args=(urls, use_proxies, stats))
+        t.start()
+        threads.append(t)
     
-    # Keep main process alive and wait for processes to finish
+    # Keep main thread alive and wait for threads to finish
     try:
-        for p in processes:
-            p.join()
+        for t in threads:
+            t.join()
     except KeyboardInterrupt:
-        with running.get_lock():
-            logger.info("Stopping processes due to interrupt...")
-            running.value = False
-        for p in processes:
-            p.join()
+        global running
+        logger.info("Stopping threads due to interrupt...")
+        running = False
+        for t in threads:
+            t.join()
     
     # Final stats
     logger.info("===== FINAL VIEWING RESULTS =====")
-    logger.info(f"Total view attempts: {view_count.value}")
-    logger.info(f"Successful views: {success_count.value}")
-    logger.info(f"Failed views: {fail_count.value}")
-    if view_count.value > 0:
-        success_rate = (success_count.value / view_count.value) * 100
+    logger.info(f"Total view attempts: {stats['view_count']}")
+    logger.info(f"Successful views: {stats['success_count']}")
+    logger.info(f"Failed views: {stats['fail_count']}")
+    if stats['view_count'] > 0:
+        success_rate = (stats['success_count'] / stats['view_count']) * 100
         logger.info(f"Success rate: {success_rate:.1f}%")
-
+        
+        
+        
 if __name__ == "__main__":
     # Variable to change the number of processes
-    NUM_PROCESSES = 6  # Change this value to adjust the number of concurrent processes
+    NUM_THREADS = 6  # Change this value to adjust the number of concurrent processes
     
     shorts_to_view = [
         "https://www.youtube.com/shorts/lOVVGfSKCv4",
@@ -469,7 +518,7 @@ if __name__ == "__main__":
     ]
     
     try:
-        process_shorts_continuously(shorts_to_view, use_proxies=True, num_processes=NUM_PROCESSES)
+        process_shorts_continuously(shorts_to_view, use_proxies=True, num_threads=NUM_THREADS)
     except KeyboardInterrupt:
         logger.info("Script interrupted by user")
     except Exception as e:

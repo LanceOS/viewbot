@@ -8,29 +8,128 @@ from selenium.common.exceptions import ElementClickInterceptedException, Timeout
 import time
 import random
 import logging
+import requests
+from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor
+import os
+import signal
+import sys
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def simulate_short_view(url):
-    chrome_options = Options()
-    chrome_options.add_argument("--window-size=412,732")  # Mobile viewport
-    chrome_options.add_argument("--user-agent=Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1")
+# File to store proxy list
+PROXY_FILE = "proxylist.txt"
+
+# Global flag to control execution
+running = True
+
+def signal_handler(sig, frame):
+    """Handle Ctrl+C to gracefully exit the script"""
+    global running
+    logger.info("Stopping script (this may take a moment to complete current view)...")
+    running = False
+
+# Register the signal handler for graceful shutdown
+signal.signal(signal.SIGINT, signal_handler)
+
+def fetch_proxies():
+    """
+    Fetch free proxies from multiple sources and save to a file
+    """
+    logger.info("Fetching fresh proxies...")
+    proxies = []
+    sources = [
+        "https://www.sslproxies.org/",
+        "https://free-proxy-list.net/",
+        "https://www.us-proxy.org/"
+    ]
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    }
     
-    # Anti-detection configurations
+    for source in sources:
+        try:
+            logger.info(f"Fetching proxies from {source}")
+            response = requests.get(source, headers=headers, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            table = soup.find('table', {'class': 'table table-striped table-bordered'})
+            if not table:
+                logger.warning(f"No proxy table found in {source}")
+                continue
+            for row in table.tbody.find_all('tr'):
+                cells = row.find_all('td')
+                if len(cells) >= 2:
+                    ip = cells[0].text.strip()
+                    port = cells[1].text.strip()
+                    https = cells[6].text.strip()
+                    if https.lower() == 'yes':
+                        proxy = f"{ip}:{port}"
+                        proxies.append(proxy)
+        except Exception as e:
+            logger.error(f"Error fetching proxies from {source}: {str(e)}")
+    
+    working_proxies = []
+    logger.info(f"Testing {len(proxies)} proxies for viability...")
+    
+    def test_proxy(proxy):
+        try:
+            test_url = "https://www.google.com"
+            proxies = {
+                "http": f"http://{proxy}",
+                "https": f"https://{proxy}"
+            }
+            response = requests.get(test_url, proxies=proxies, timeout=5)
+            if response.status_code == 200:
+                return proxy
+        except:
+            pass
+        return None
+    
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(executor.map(test_proxy, proxies))
+    
+    working_proxies = [proxy for proxy in results if proxy]
+    with open(PROXY_FILE, "w") as f:
+        for proxy in working_proxies:
+            f.write(f"{proxy}\n")
+    
+    logger.info(f"Saved {len(working_proxies)} working proxies to {PROXY_FILE}")
+    return working_proxies
+
+def get_random_proxy():
+    """
+    Get a random proxy from the proxy file or fetch new ones if needed
+    """
+    proxies = []
+    if os.path.exists(PROXY_FILE):
+        with open(PROXY_FILE, "r") as f:
+            proxies = [line.strip() for line in f if line.strip()]
+    if not proxies:
+        proxies = fetch_proxies()
+    if not proxies:
+        logger.warning("No proxies available")
+        return None
+    proxy = random.choice(proxies)
+    logger.info(f"Using proxy: {proxy}")
+    return proxy
+
+def simulate_short_view(url, proxy=None):
+    chrome_options = Options()
+    chrome_options.add_argument("--window-size=412,732")
+    chrome_options.add_argument("--user-agent=Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option("useAutomationExtension", False)
-    
-    # Add additional stealth options
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--disable-gpu")
+    if proxy:
+        chrome_options.add_argument(f'--proxy-server={proxy}')
+        logger.info(f"Setting up Chrome with proxy: {proxy}")
     
-    # Create a new driver instance
     driver = webdriver.Chrome(options=chrome_options)
-    
-    # Execute CDP commands to mask WebDriver
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
         Object.defineProperty(navigator, 'webdriver', {
@@ -42,127 +141,55 @@ def simulate_short_view(url):
     try:
         logger.info(f"Opening URL: {url}")
         driver.get(url)
-        
-        # Wait for initial page load with longer timeout
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.TAG_NAME, "ytd-app"))
-        )
+        WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.TAG_NAME, "ytd-app")))
         logger.info("Page loaded successfully")
-        
-        # Wait a bit for any popups to appear
         time.sleep(5)
         
-        # Dismiss any dialogs or popups that might interfere
-        try:
-            # Use JavaScript to dismiss common YouTube popups
-            driver.execute_script("""
-                // Remove any visible dialogs
-                const dialogs = document.querySelectorAll('tp-yt-paper-dialog, ytd-popup-container');
-                dialogs.forEach(dialog => dialog.remove());
-                
-                // Remove any modal overlays
-                const overlays = document.querySelectorAll('.ytd-consent-bump-v2-lightbox, ytd-consent-bump-v2-lightbox');
-                overlays.forEach(overlay => overlay.remove());
-                
-                // Clear fixed elements that might intercept clicks
-                const fixedElements = document.querySelectorAll('.ytd-popup-container, .ytd-mealbar-promo-renderer');
-                fixedElements.forEach(el => el.remove());
-            """)
-            logger.info("Attempted to remove popups via JavaScript")
-        except Exception as e:
-            logger.warning(f"Error handling popups: {str(e)}")
-        
-        # Wait a moment for things to settle
+        driver.execute_script("""
+            const dialogs = document.querySelectorAll('tp-yt-paper-dialog, ytd-popup-container');
+            dialogs.forEach(dialog => dialog.remove());
+            const overlays = document.querySelectorAll('.ytd-consent-bump-v2-lightbox');
+            overlays.forEach(overlay => overlay.remove());
+            const fixedElements = document.querySelectorAll('.ytd-popup-container, .ytd-mealbar-promo-renderer');
+            fixedElements.forEach(el => el.remove());
+        """)
+        logger.info("Attempted to remove popups via JavaScript")
         time.sleep(2)
         
-        # Target the video player area directly with JavaScript
         logger.info("Attempting to find and interact with the video player...")
-        try:
-            # First scroll to ensure we're in the right area
-            driver.execute_script("window.scrollTo(0, 100);")
-            time.sleep(1)
-            
-            # Click in the center of the viewport where the video typically is
-            viewport_height = driver.execute_script("return window.innerHeight;")
-            viewport_width = driver.execute_script("return window.innerWidth;")
-            
-            # Calculate center of viewport
-            center_x = viewport_width / 2
-            center_y = viewport_height / 2
-            
-            # Use JavaScript to create and dispatch a click event in the center
-            driver.execute_script(f"""
-                const clickEvent = new MouseEvent('click', {{
-                    view: window,
-                    bubbles: true,
-                    cancelable: true,
-                    clientX: {center_x},
-                    clientY: {center_y}
-                }});
-                document.elementFromPoint({center_x}, {center_y}).dispatchEvent(clickEvent);
-            """)
-            logger.info(f"Clicked at viewport center ({center_x}, {center_y})")
-            time.sleep(2)
-        except Exception as e:
-            logger.warning(f"Error with center click: {str(e)}")
+        driver.execute_script("window.scrollTo(0, 100);")
+        time.sleep(1)
+        viewport_height = driver.execute_script("return window.innerHeight;")
+        viewport_width = driver.execute_script("return window.innerWidth;")
+        center_x = viewport_width / 2
+        center_y = viewport_height / 2
+        driver.execute_script(f"""
+            const clickEvent = new MouseEvent('click', {{
+                view: window,
+                bubbles: true,
+                cancelable: true,
+                clientX: {center_x},
+                clientY: {center_y}
+            }});
+            document.elementFromPoint({center_x}, {center_y}).dispatchEvent(clickEvent);
+        """)
+        logger.info(f"Clicked at viewport center ({center_x}, {center_y})")
+        time.sleep(2)
         
-        # Now try to locate and interact with the video element
         logger.info("Searching for video element...")
         try:
-            # Use a more lenient selector to find the video
-            video_selector = "video"
-            video = WebDriverWait(driver, 20).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, video_selector))
-            )
+            video = WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.CSS_SELECTOR, "video")))
             logger.info("Video element found!")
-            
-            # Scroll the video into center view
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", video)
             time.sleep(1)
-            
-            # Get the dimensions and position of the video
-            video_rect = driver.execute_script("""
-                const rect = arguments[0].getBoundingClientRect();
-                return {
-                    top: rect.top,
-                    left: rect.left,
-                    width: rect.width,
-                    height: rect.height
-                };
-            """, video)
-            
-            logger.info(f"Video position: {video_rect}")
-            
-            # Click in the center of the video using ActionChains
             try:
-                video_center_x = video_rect['left'] + (video_rect['width'] / 2)
-                video_center_y = video_rect['top'] + (video_rect['height'] / 2)
-                
-                # Check if the center of the video is visible in the viewport
-                is_visible = driver.execute_script(f"""
-                    return (
-                        {video_center_x} >= 0 &&
-                        {video_center_y} >= 0 &&
-                        {video_center_x} <= window.innerWidth &&
-                        {video_center_y} <= window.innerHeight
-                    );
-                """)
-                
-                if is_visible:
-                    logger.info(f"Video center is visible at ({video_center_x}, {video_center_y})")
-                    actions = ActionChains(driver)
-                    actions.move_to_element_with_offset(video, video_rect['width']/2, video_rect['height']/2)
-                    actions.click()
-                    actions.perform()
-                else:
-                    logger.warning("Video center is not in viewport, using JavaScript click instead")
-                    driver.execute_script("arguments[0].click();", video)
+                actions = ActionChains(driver)
+                actions.move_to_element(video).click().perform()
             except ElementClickInterceptedException:
                 logger.warning("Click intercepted, using JavaScript to play video")
                 driver.execute_script("arguments[0].play();", video)
         except TimeoutException:
             logger.warning("Could not find video with specific selector, trying a direct approach")
-            # Try to find any video element
             videos = driver.find_elements(By.TAG_NAME, "video")
             if videos:
                 logger.info(f"Found {len(videos)} video elements with tag search")
@@ -173,49 +200,36 @@ def simulate_short_view(url):
                 driver.save_screenshot('no_video.png')
                 return False
         
-        # Check if video is actually playing
         time.sleep(3)
-        try:
-            is_playing = driver.execute_script("""
+        is_playing = driver.execute_script("""
+            const videos = document.querySelectorAll('video');
+            for (let i = 0; i < videos.length; i++) {
+                if (!videos[i].paused) return true;
+            }
+            return false;
+        """)
+        if is_playing:
+            logger.info("Video is playing successfully!")
+        else:
+            logger.warning("Video not playing, attempting to resume")
+            driver.execute_script("""
                 const videos = document.querySelectorAll('video');
-                for (let i = 0; i < videos.length; i++) {
-                    if (!videos[i].paused) return true;
-                }
-                return false;
+                videos.forEach(v => v.play());
             """)
-            
-            if is_playing:
-                logger.info("Video is playing successfully!")
-            else:
-                logger.warning("Video not playing, attempting another method")
-                driver.execute_script("""
-                    const videos = document.querySelectorAll('video');
-                    videos.forEach(v => v.play());
-                """)
-                time.sleep(2)
-        except Exception as e:
-            logger.warning(f"Error checking playback: {str(e)}")
+            time.sleep(2)
         
-        # Get video duration
-        try:
-            duration = driver.execute_script("""
-                const videos = document.querySelectorAll('video');
-                for (let i = 0; i < videos.length; i++) {
-                    if (videos[i].duration) return videos[i].duration;
-                }
-                return 30;
-            """)
-            logger.info(f"Video duration: {duration} seconds")
-            watch_time = min(60, duration * 0.8)  # Watch 80% or 60s max
-        except:
-            logger.warning("Error getting video duration, using default watch time")
-            watch_time = 30
-        
-        # Watch the video
-        logger.info(f"Watching for {watch_time} seconds")
+        # Set watch time between 1 and 2 minutes (60-120 seconds)
+        watch_time = random.uniform(60, 120)
+        logger.info(f"Watching for {watch_time:.1f} seconds")
         start_time = time.time()
+        comments_opened = False  # Flag to ensure comments are opened at least once
+        
         while time.time() - start_time < watch_time:
-            # Periodically check if video is still playing
+            if not running:
+                logger.info("Stopping current view early due to shutdown signal")
+                break
+            
+            # Check if video is still playing
             is_playing = driver.execute_script("""
                 const videos = document.querySelectorAll('video');
                 for (let i = 0; i < videos.length; i++) {
@@ -223,7 +237,6 @@ def simulate_short_view(url):
                 }
                 return false;
             """)
-            
             if not is_playing:
                 logger.warning("Video paused, attempting to resume")
                 driver.execute_script("""
@@ -231,17 +244,52 @@ def simulate_short_view(url):
                     videos.forEach(v => v.play());
                 """)
             
+            # Open comments section at least once, at a random point
+            if not comments_opened and random.random() < 0.3:  # 30% chance per check
+                try:
+                    # Find the comments button (often a speech bubble icon or "Comments" text)
+                    comments_button = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Show comments'] | //ytm-comment-section-renderer"))
+                    )
+                    actions = ActionChains(driver)
+                    actions.move_to_element(comments_button).click().perform()
+                    logger.info("Opened comments section")
+                    comments_opened = True
+                    time.sleep(2)  # Pause briefly to simulate reading comments
+                except TimeoutException:
+                    logger.warning("Comments button not found, trying alternative method")
+                    driver.execute_script("""
+                        const comments = document.querySelector('ytm-comment-section-renderer, #comments-button');
+                        if (comments) comments.click();
+                    """)
+                    if driver.execute_script("return !!document.querySelector('ytm-comment-section-renderer.visible');"):
+                        logger.info("Opened comments section via JavaScript")
+                        comments_opened = True
+                        time.sleep(2)
+                    else:
+                        logger.warning("Could not open comments section")
+            
             # Small random scroll to simulate engagement
             if random.random() < 0.2:
                 small_scroll = random.randint(-10, 10)
                 driver.execute_script(f"window.scrollBy(0, {small_scroll});")
-            
-            # Wait a bit before next check
             time.sleep(3)
+        
+        if not comments_opened:
+            # Ensure comments are opened at least once if not triggered earlier
+            try:
+                comments_button = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Show comments'] | //ytm-comment-section-renderer"))
+                )
+                actions = ActionChains(driver)
+                actions.move_to_element(comments_button).click().perform()
+                logger.info("Opened comments section (forced at end)")
+                time.sleep(2)
+            except TimeoutException:
+                logger.warning("Forced comments opening failed")
         
         logger.info("Successfully watched short!")
         return True
-        
     except Exception as e:
         logger.error(f"Failed: {str(e)}")
         try:
@@ -253,33 +301,78 @@ def simulate_short_view(url):
     finally:
         driver.quit()
 
-def process_multiple_shorts(urls):
-    results = []
-    for url in urls:
-        success = simulate_short_view(url)
-        results.append((url, success))
-        # Random delay between videos to appear more natural
-        time.sleep(random.uniform(5, 15))
+def process_shorts_continuously(urls, use_proxies=True):
+    """
+    Process shorts continuously in random order until stopped
+    """
+    global running
+    view_count = 0
+    success_count = 0
+    fail_count = 0
     
-    # Report results
-    logger.info("===== VIEWING RESULTS =====")
-    for url, success in results:
-        status = "SUCCESS" if success else "FAILED"
-        logger.info(f"{status}: {url}")
+    logger.info("Starting continuous viewing mode. Press Ctrl+C to stop.")
+    logger.info(f"Starting continuous viewing of {len(urls)} shorts in random order")
+    
+    if use_proxies and not os.path.exists(PROXY_FILE):
+        fetch_proxies()
+    
+    while running:
+        shuffled_urls = urls.copy()
+        random.shuffle(shuffled_urls)
+        for url in shuffled_urls:
+            if not running:
+                break
+            view_count += 1
+            proxy = get_random_proxy() if use_proxies else None
+            if use_proxies and proxy is None:
+                logger.warning("No proxies available, fetching new ones...")
+                fetch_proxies()
+                proxy = get_random_proxy()
+            
+            logger.info(f"View attempt #{view_count} - URL: {url}")
+            success = simulate_short_view(url, proxy)
+            
+            if success:
+                success_count += 1
+            else:
+                fail_count += 1
+            
+            if view_count % 10 == 0:
+                success_rate = (success_count / view_count) * 100
+                logger.info(f"Stats: {success_count} successes, {fail_count} failures - {success_rate:.1f}% success rate")
+            
+            if running:
+                delay = random.uniform(15, 55)
+                logger.info(f"Waiting {delay:.2f} seconds before next video...")
+                sleep_start = time.time()
+                while running and (time.time() - sleep_start < delay):
+                    time.sleep(1)
+    
+    logger.info("===== FINAL VIEWING RESULTS =====")
+    logger.info(f"Total view attempts: {view_count}")
+    logger.info(f"Successful views: {success_count}")
+    logger.info(f"Failed views: {fail_count}")
+    if view_count > 0:
+        success_rate = (success_count / view_count) * 100
+        logger.info(f"Success rate: {success_rate:.1f}%")
 
 if __name__ == "__main__":
-    # # You can test with a single short
-    # simulate_short_view("https://www.youtube.com/shorts/lOVVGfSKCv4")
-    
-    # Or process multiple shorts
     shorts_to_view = [
-        "https://www.youtube.com/shorts/lOVVGfSKCv4",  # Example Short 1
-        "https://www.youtube.com/shorts/OPSV7kjrnw8",  # Example Short 2
-        "https://www.youtube.com/shorts/EuqmysuhS30",  # Example Short 3
+        "https://www.youtube.com/shorts/lOVVGfSKCv4",
+        "https://www.youtube.com/shorts/OPSV7kjrnw8",
+        "https://www.youtube.com/shorts/EuqmysuhS30",
         "https://www.youtube.com/shorts/BrsWRRqOGNk",
         "https://www.youtube.com/shorts/-yw5boY3eB4",
         "https://www.youtube.com/shorts/GaFQx3_bx7k",
         "https://www.youtube.com/shorts/F-OOCA9pxP0",
         "https://www.youtube.com/shorts/QUSrYy0Ls-w"
     ]
-    process_multiple_shorts(shorts_to_view)
+    
+    try:
+        process_shorts_continuously(shorts_to_view, use_proxies=True)
+    except KeyboardInterrupt:
+        logger.info("Script interrupted by user")
+    except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}")
+    finally:
+        logger.info("Script execution completed")

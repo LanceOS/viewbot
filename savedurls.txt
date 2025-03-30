@@ -1,8 +1,0 @@
-   "https://www.youtube.com/shorts/lOVVGfSKCv4",  # Example Short 1
-   "https://www.youtube.com/shorts/OPSV7kjrnw8",  # Example Short 2
-   "https://www.youtube.com/shorts/EuqmysuhS30",  # Example Short 3
-   "https://www.youtube.com/shorts/BrsWRRqOGNk",
-   "https://www.youtube.com/shorts/-yw5boY3eB4",
-   "https://www.youtube.com/shorts/GaFQx3_bx7k",
-   "https://www.youtube.com/shorts/F-OOCA9pxP0",
-   "https://www.youtube.com/shorts/QUSrYy0Ls-w"

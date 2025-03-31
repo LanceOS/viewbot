@@ -504,9 +504,13 @@ def process_shorts_continuously(urls, use_proxies=True, num_threads=3):
         
 if __name__ == "__main__":
     # Variable to change the number of processes
-    NUM_THREADS = 6  # Change this value to adjust the number of concurrent processes
+    NUM_THREADS = 4  # Change this value to adjust the number of concurrent processes
     
     shorts_to_view = [
+        "https://youtube.com/shorts/JfodRXOmAxU",
+        "https://youtube.com/shorts/z2MJe0Q_A-o",
+        "https://youtube.com/shorts/0CSpNp1X144",
+        "https://youtube.com/shorts/s0Ui36XEbMM"
         "https://www.youtube.com/shorts/lOVVGfSKCv4",
         "https://www.youtube.com/shorts/OPSV7kjrnw8",
         "https://www.youtube.com/shorts/EuqmysuhS30",

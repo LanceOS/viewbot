@@ -1,1 +1,94 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap');
 @import 'tailwindcss';
+
+@theme {
+	--color-base-100: oklch(98% 0 0);
+	--color-base-200: oklch(97% 0 0);
+	--color-base-300: oklch(0.89 0.0101 267.35);
+	--color-base-content: oklch(20% 0 0);
+	--color-primary: oklch(59% 0.249 0.584);
+	--color-primary-content: oklch(97% 0.014 343.198);
+	--color-secondary: oklch(59% 0.145 163.225);
+	--color-secondary-content: oklch(97% 0.021 166.113);
+	--color-accent: oklch(54% 0.281 293.009);
+	--color-accent-content: oklch(96% 0.016 293.756);
+	--color-neutral: oklch(37% 0 0);
+	--color-neutral-content: oklch(98% 0 0);
+	--color-info: oklch(70% 0.165 254.624);
+	--color-info-content: oklch(28% 0.091 267.935);
+	--color-success: oklch(79% 0.209 151.711);
+	--color-success-content: oklch(26% 0.065 152.934);
+	--color-warning: oklch(82% 0.189 84.429);
+	--color-warning-content: oklch(27% 0.077 45.635);
+	--color-error: oklch(70% 0.191 22.216);
+	--color-error-content: oklch(25% 0.092 26.042);
+	--radius-selector: 0.25rem;
+	--radius-field: 0rem;
+	--radius-box: 0.25rem;
+	--size-selector: 0.25rem;
+	--size-field: 0.25rem;
+	--border: 1px;
+	--depth: 0;
+	--noise: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+	font-weight: bold;
+	font-family: 'Inter', sans-serif;
+}
+
+.btn {
+	background-color: var(--color-primary);
+	padding: 0.5rem 2rem;
+	color: var(--color-primary-content);
+	transition: 0.2s;
+	font-weight: 500;
+	height: fit-content;
+	cursor: pointer;
+}
+
+.btn-start {
+	background-color: var(--color-success);
+	padding: 0.5rem 2rem;
+	color: var(--color-success-content);
+	transition: 0.2s;
+	font-weight: 500;
+	height: fit-content;
+	cursor: pointer;
+}
+
+.btn-stop {
+	background-color: var(--color-error);
+	padding: 0.5rem 2rem;
+	color: var(--color-error-content);
+	transition: 0.2s;
+	font-weight: 500;
+	height: fit-content;
+	cursor: pointer;
+}
+
+.btn:hover,
+.btn-start:hover,
+.btn-stop:hover {
+	transform: scale(1.05);
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html {
+	background-color: var(--color-base-100);
+	color: var(--color-base-content);
+	scroll-behavior: smooth;
+}
+
+body {
+	margin: 0;
+	font-family: 'Poppins', sans-serif;
+}

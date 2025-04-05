@@ -1,0 +1,4 @@
+venv
+.env*
+
+pocketbase/pb_data
